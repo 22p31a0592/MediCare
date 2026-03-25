@@ -1,14 +1,6 @@
 /**
- * modals/AddPillModal/index.js  ← MAIN AddPillModal ENTRY
- * ─────────────────────────────────────────────────────────
- * Composes the Add Medication modal from focused sub-parts.
- * "Time of Day" field removed (redundant — alarm time covers it).
- *
- * Sub-files:
- *  constants.js               ← frequency options + alarm tones
- *  useAddPillForm.js          ← all form state in one hook
- *  components/AlarmSection.js ← alarm toggle + time + tone picker
- * ─────────────────────────────────────────────────────────
+ * modals/AddPillModal/index.js
+ * Updated: passes alarmTimes array props to AlarmSection.
  */
 
 import React from 'react';
@@ -18,8 +10,8 @@ import {
 } from 'react-native';
 import { X, ChevronDown } from 'lucide-react-native';
 
-import { useAddPillForm }  from './useAddPillForm';
-import { AlarmSection }    from './components/AlarmSection';
+import { useAddPillForm }    from './useAddPillForm';
+import { AlarmSection }      from './components/AlarmSection';
 import { FREQUENCY_OPTIONS } from './constants';
 
 export function AddPillModal({ onClose, onAdd }) {
@@ -35,7 +27,6 @@ export function AddPillModal({ onClose, onAdd }) {
       <View style={styles.overlay}>
         <View style={styles.modal}>
 
-          {/* ── Header ── */}
           <View style={styles.header}>
             <Text style={styles.title}>Add Medication</Text>
             <TouchableOpacity onPress={onClose} style={styles.closeBtn}>
@@ -45,53 +36,27 @@ export function AddPillModal({ onClose, onAdd }) {
 
           <ScrollView showsVerticalScrollIndicator={false}>
 
-            {/* Medication Name */}
             <FormLabel text="Medication Name *" />
-            <TextInput
-              style={styles.input}
-              placeholder="e.g., Aspirin"
-              value={form.name}
-              onChangeText={form.setName}
-              placeholderTextColor="#9ca3af"
-            />
+            <TextInput style={styles.input} placeholder="e.g., Aspirin"
+              value={form.name} onChangeText={form.setName} placeholderTextColor="#9ca3af" />
 
-            {/* Dosage */}
             <FormLabel text="Dosage *" />
-            <TextInput
-              style={styles.input}
-              placeholder="e.g., 100mg"
-              value={form.dosage}
-              onChangeText={form.setDosage}
-              placeholderTextColor="#9ca3af"
-            />
+            <TextInput style={styles.input} placeholder="e.g., 100mg"
+              value={form.dosage} onChangeText={form.setDosage} placeholderTextColor="#9ca3af" />
 
-            {/* Quantity + Total Days - side by side */}
             <View style={styles.row}>
               <View style={styles.halfLeft}>
                 <FormLabel text="Qty (pills) *" />
-                <TextInput
-                  style={styles.input}
-                  placeholder="30"
-                  value={form.quantity}
-                  onChangeText={form.setQuantity}
-                  keyboardType="numeric"
-                  placeholderTextColor="#9ca3af"
-                />
+                <TextInput style={styles.input} placeholder="30" value={form.quantity}
+                  onChangeText={form.setQuantity} keyboardType="numeric" placeholderTextColor="#9ca3af" />
               </View>
               <View style={styles.halfRight}>
                 <FormLabel text="Total Days" />
-                <TextInput
-                  style={styles.input}
-                  placeholder="30"
-                  value={form.totalDays}
-                  onChangeText={form.setTotalDays}
-                  keyboardType="numeric"
-                  placeholderTextColor="#9ca3af"
-                />
+                <TextInput style={styles.input} placeholder="30" value={form.totalDays}
+                  onChangeText={form.setTotalDays} keyboardType="numeric" placeholderTextColor="#9ca3af" />
               </View>
             </View>
 
-            {/* Frequency dropdown */}
             <FormLabel text="Frequency *" />
             <TouchableOpacity
               style={styles.dropdownBtn}
@@ -109,15 +74,10 @@ export function AddPillModal({ onClose, onAdd }) {
             {form.showFrequencyPicker && (
               <View style={styles.dropdownList}>
                 {FREQUENCY_OPTIONS.map((opt) => (
-                  <TouchableOpacity
-                    key={opt}
+                  <TouchableOpacity key={opt}
                     style={[styles.dropdownItem, form.frequency === opt && styles.dropdownItemSelected]}
-                    onPress={() => { form.setFrequency(opt); form.setShowFrequencyPicker(false); }}
-                  >
-                    <Text style={[
-                      styles.dropdownItemText,
-                      form.frequency === opt && styles.dropdownItemTextSelected,
-                    ]}>
+                    onPress={() => { form.setFrequency(opt); form.setShowFrequencyPicker(false); }}>
+                    <Text style={[styles.dropdownItemText, form.frequency === opt && styles.dropdownItemTextSelected]}>
                       {opt}
                     </Text>
                   </TouchableOpacity>
@@ -125,44 +85,37 @@ export function AddPillModal({ onClose, onAdd }) {
               </View>
             )}
 
-            {/* Alarm section */}
+            {/* ── Alarm section: N pickers based on frequency ── */}
             <View style={styles.alarmWrapper}>
               <AlarmSection
                 enableAlarm={form.enableAlarm}
                 setEnableAlarm={form.setEnableAlarm}
-                alarmTime={form.alarmTime}
-                showTimePicker={form.showTimePicker}
-                setShowTimePicker={form.setShowTimePicker}
+                alarmTimes={form.alarmTimes}
+                openPickerIdx={form.openPickerIdx}
+                setOpenPickerIdx={form.setOpenPickerIdx}
                 onTimeChange={form.onTimeChange}
                 formatTime={form.formatTime}
                 selectedTone={form.selectedTone}
                 setSelectedTone={form.setSelectedTone}
                 showTonePicker={form.showTonePicker}
                 setShowTonePicker={form.setShowTonePicker}
+                frequency={form.frequency}
               />
             </View>
 
-            {/* Notes */}
             <FormLabel text="Notes (Optional)" />
-            <TextInput
-              style={[styles.input, styles.textArea]}
+            <TextInput style={[styles.input, styles.textArea]}
               placeholder="Additional instructions or reminders"
-              value={form.notes}
-              onChangeText={form.setNotes}
-              multiline
-              numberOfLines={3}
-              placeholderTextColor="#9ca3af"
-            />
+              value={form.notes} onChangeText={form.setNotes}
+              multiline numberOfLines={3} placeholderTextColor="#9ca3af" />
 
-            {/* Action buttons */}
             <View style={styles.btnRow}>
               <TouchableOpacity style={styles.cancelBtn} onPress={onClose}>
                 <Text style={styles.cancelText}>Cancel</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.submitBtn, !form.isFormValid && styles.submitDisabled]}
-                onPress={handleSubmit}
-              >
+                onPress={handleSubmit}>
                 <Text style={styles.submitText}>Add Medication</Text>
               </TouchableOpacity>
             </View>
@@ -174,111 +127,35 @@ export function AddPillModal({ onClose, onAdd }) {
   );
 }
 
-// Small helper to keep JSX clean
 function FormLabel({ text }) {
   return <Text style={styles.label}>{text}</Text>;
 }
 
 const styles = StyleSheet.create({
-  overlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.45)',
-    justifyContent: 'flex-end',
-  },
-  modal: {
-    backgroundColor: '#fff',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    padding: 20,
-    maxHeight: '92%',
-  },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 18,
-    paddingBottom: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f3f4f6',
-  },
-  title: { fontSize: 19, fontWeight: '700', color: '#111827' },
+  overlay:  { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'flex-end' },
+  modal:    { backgroundColor: '#fff', borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20, maxHeight: '92%' },
+  header:   { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18, paddingBottom: 14, borderBottomWidth: 1, borderBottomColor: '#f3f4f6' },
+  title:    { fontSize: 19, fontWeight: '700', color: '#111827' },
   closeBtn: { padding: 4 },
-  row: { flexDirection: 'row' },
+  row:      { flexDirection: 'row' },
   halfLeft:  { flex: 1, marginRight: 8 },
   halfRight: { flex: 1 },
-  label: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#374151',
-    marginBottom: 6,
-    marginTop: 4,
-  },
-  input: {
-    borderWidth: 1,
-    borderColor: '#d1d5db',
-    borderRadius: 9,
-    paddingHorizontal: 12,
-    paddingVertical: 11,
-    fontSize: 15,
-    color: '#111827',
-    backgroundColor: '#f9fafb',
-    marginBottom: 10,
-  },
+  label:    { fontSize: 13, fontWeight: '600', color: '#374151', marginBottom: 6, marginTop: 4 },
+  input:    { borderWidth: 1, borderColor: '#d1d5db', borderRadius: 9, paddingHorizontal: 12, paddingVertical: 11, fontSize: 15, color: '#111827', backgroundColor: '#f9fafb', marginBottom: 10 },
   textArea: { height: 75, textAlignVertical: 'top' },
   placeholder: { color: '#9ca3af' },
-  dropdownBtn: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#d1d5db',
-    borderRadius: 9,
-    paddingHorizontal: 12,
-    paddingVertical: 11,
-    backgroundColor: '#f9fafb',
-    marginBottom: 10,
-  },
+  dropdownBtn: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', borderWidth: 1, borderColor: '#d1d5db', borderRadius: 9, paddingHorizontal: 12, paddingVertical: 11, backgroundColor: '#f9fafb', marginBottom: 10 },
   dropdownText: { fontSize: 15, color: '#111827' },
-  dropdownList: {
-    borderWidth: 1,
-    borderColor: '#d1d5db',
-    borderRadius: 9,
-    marginBottom: 10,
-    backgroundColor: '#fff',
-    overflow: 'hidden',
-  },
-  dropdownItem: {
-    padding: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f3f4f6',
-  },
+  dropdownList: { borderWidth: 1, borderColor: '#d1d5db', borderRadius: 9, marginBottom: 10, backgroundColor: '#fff', overflow: 'hidden' },
+  dropdownItem:  { padding: 12, borderBottomWidth: 1, borderBottomColor: '#f3f4f6' },
   dropdownItemSelected:     { backgroundColor: '#eff6ff' },
   dropdownItemText:         { fontSize: 14, color: '#111827' },
   dropdownItemTextSelected: { color: '#1d4ed8', fontWeight: '600' },
   alarmWrapper: { marginVertical: 4 },
-  btnRow: {
-    flexDirection: 'row',
-    gap: 10,
-    marginTop: 8,
-    marginBottom: 20,
-  },
-  cancelBtn: {
-    flex: 1,
-    padding: 14,
-    borderRadius: 9,
-    borderWidth: 1,
-    borderColor: '#d1d5db',
-    alignItems: 'center',
-    backgroundColor: '#fff',
-  },
+  btnRow:    { flexDirection: 'row', gap: 10, marginTop: 8, marginBottom: 20 },
+  cancelBtn: { flex: 1, padding: 14, borderRadius: 9, borderWidth: 1, borderColor: '#d1d5db', alignItems: 'center', backgroundColor: '#fff' },
   cancelText: { fontSize: 15, fontWeight: '600', color: '#6b7280' },
-  submitBtn: {
-    flex: 2,
-    padding: 14,
-    borderRadius: 9,
-    backgroundColor: '#1d4ed8',
-    alignItems: 'center',
-  },
+  submitBtn:  { flex: 2, padding: 14, borderRadius: 9, backgroundColor: '#1d4ed8', alignItems: 'center' },
   submitDisabled: { backgroundColor: '#93c5fd' },
   submitText: { fontSize: 15, fontWeight: '700', color: '#fff' },
 });

@@ -1,13 +1,6 @@
 /**
  * services/NotificationService/handlers/scheduleSnooze.js
- * ─────────────────────────────────────────────────────────
- * ROOT CAUSE OF ERROR:
- *   'AlarmType' is NOT exported by @notifee/react-native.
- *   Use the raw numeric value 3 (SET_ALARM_CLOCK) instead.
- *
- * OTHER FIXES:
- *   vibrationPattern: first value was 0 → must be > 0 on Android
- * ─────────────────────────────────────────────────────────
+ * One-shot alarm 5 minutes from now.
  */
 
 import notifee, {
@@ -15,13 +8,10 @@ import notifee, {
   AndroidImportance,
   AndroidCategory,
   AndroidVisibility,
-  // ⚠️  DO NOT import AlarmType — it is not exported by notifee
 } from '@notifee/react-native';
 import { ALARM_CHANNEL_ID } from '../channels/createChannels';
 
-const SNOOZE_MS = 5 * 60 * 1000; // 5 minutes
-
-// AlarmType.SET_ALARM_CLOCK = 3  (notifee internal enum, not exported)
+const SNOOZE_MS                  = 5 * 60 * 1000;
 const ALARM_TYPE_SET_ALARM_CLOCK = 3;
 
 export async function scheduleSnooze(pill) {
@@ -34,23 +24,23 @@ export async function scheduleSnooze(pill) {
         android: {
           channelId:        ALARM_CHANNEL_ID,
           importance:       AndroidImportance.HIGH,
+          asForegroundService: true,
           category:         AndroidCategory.ALARM,
           visibility:       AndroidVisibility.PUBLIC,
           smallIcon:        'ic_notification',
           color:            '#f59e0b',
-          sound:            pill.alarmTone || 'alarm_classic',
-          vibrationPattern: [300, 500, 200, 500], // all > 0
-
+          vibrationPattern: [300, 500, 200, 500],
           fullScreenAction: { id: 'default', launchActivity: 'default' },
           ongoing:          true,
           autoCancel:       false,
           pressAction:      { id: 'default', launchActivity: 'default' },
           actions: [
-            { title: '✅ Taken', pressAction: { id: 'taken' } },
+            { title: '✅ Taken',        pressAction: { id: 'taken'  } },
+            { title: '⏰ Snooze 5 min', pressAction: { id: 'snooze' } },
           ],
         },
         ios: {
-          sound:          pill.alarmTone || 'alarm_classic',
+          sound:          pill.alarmTone || 'alarm_classic.mp3',
           critical:       true,
           criticalVolume: 1.0,
           categoryId:     'med-alarm',
@@ -58,18 +48,15 @@ export async function scheduleSnooze(pill) {
         data: {
           pillId: pill._id,
           pill:   JSON.stringify(pill),
+          type:   'alarm',
         },
       },
       {
         type:         TriggerType.TIMESTAMP,
         timestamp:    Date.now() + SNOOZE_MS,
-        alarmManager: {
-          type:           ALARM_TYPE_SET_ALARM_CLOCK, // ← raw number 3
-          allowWhileIdle: true,
-        },
+        alarmManager: { type: ALARM_TYPE_SET_ALARM_CLOCK, allowWhileIdle: true },
       }
     );
-
     console.log(`⏰ Snoozed 5 min: ${pill.name}`);
   } catch (err) {
     console.error('scheduleSnooze error:', err);

@@ -13,8 +13,8 @@ export const API_CONFIG = {
   
   getBaseUrl: () => {
     if (__DEV__) {
-      // ⭐ For USB connection, use localhost
-      const USING_USB = true; // Set to true for USB connection
+      
+      const USING_USB = true; 
       
       if (USING_USB) {
         console.log('📱 Using USB connection: http://localhost:5000');

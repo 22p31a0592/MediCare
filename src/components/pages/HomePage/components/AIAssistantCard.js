@@ -18,7 +18,7 @@ export function AIAssistantCard({ aiRecommendations, onPress }) {
           <Brain size={22} color="#fff" />
         </View>
         <View style={styles.content}>
-          <Text style={styles.title}>AI Health Assistant</Text>
+          <Text style={styles.title}>Health Assistant</Text>
           <Text style={styles.desc}>Symptom analysis · Diet · Exercise advice</Text>
 
           {aiRecommendations && (

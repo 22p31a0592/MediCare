@@ -1,21 +1,17 @@
 /**
  * services/NotificationService/handlers/scheduleAlarm.js
- * ─────────────────────────────────────────────────────────
- * ROOT CAUSE OF ERROR:
- *   'AlarmType' is NOT exported by @notifee/react-native.
- *   It only exists as an internal TypeScript enum.
- *   Trying to import it crashes at runtime.
  *
- * FIX: Use the raw numeric value directly.
- *   AlarmType enum values (from notifee source):
- *     0 = ON_EXACT_WHILE_IDLE   (setAndAllowWhileIdle)
- *     1 = ON_EXACT              (setExact)
- *     2 = EXACT_WHILE_IDLE      (setExactAndAllowWhileIdle)
- *     3 = SET_ALARM_CLOCK       ← this is what we want
+ * FIXES:
+ *  1. Sound field removed from notification — Android ignores it anyway
+ *     after the channel is created. Sound is controlled by the CHANNEL only.
+ *     Keeping it caused confusion when they didn't match.
  *
- * OTHER FIXES:
- *   vibrationPattern: first value was 0 → must be > 0 on Android
- * ─────────────────────────────────────────────────────────
+ *  2. scheduleReminder() removed — no top notification, only real alarm.
+ *
+ *  3. Loops pill.alarmTimes[] — one alarm per time slot.
+ *     "Twice daily" → 2 separate alarms scheduled independently.
+ *
+ *  4. Each alarm ID: `${pill._id}-alarm-${index}` so they cancel individually.
  */
 
 import notifee, {
@@ -24,108 +20,98 @@ import notifee, {
   AndroidImportance,
   AndroidCategory,
   AndroidVisibility,
-  // ⚠️  DO NOT import AlarmType — it is not exported by notifee
 } from '@notifee/react-native';
 
-import { REMINDER_CHANNEL_ID, ALARM_CHANNEL_ID } from '../channels/createChannels';
-import { parseTime, nextOccurrence }              from '../helpers/timeHelpers';
+import { ALARM_CHANNEL_ID }            from '../channels/createChannels';
+import { parseTime, nextOccurrence }   from '../helpers/timeHelpers';
 
-// AlarmType.SET_ALARM_CLOCK = 3  (notifee internal enum, not exported)
+// AlarmType.SET_ALARM_CLOCK = 3 (internal enum — NOT exported by notifee)
 const ALARM_TYPE_SET_ALARM_CLOCK = 3;
 
-// ── 10-minute heads-up notification ──────────────────────
-
-export async function scheduleReminder(pill) {
-  const { hours, minutes } = parseTime(pill.alarmTime);
-
-  await notifee.createTriggerNotification(
-    {
-      id:    `${pill._id}-reminder`,
-      title: '⏰ Medication in 10 minutes',
-      body:  `${pill.name} (${pill.dosage}) — get ready!`,
-      android: {
-        channelId:     REMINDER_CHANNEL_ID,
-        importance:    AndroidImportance.HIGH,
-        smallIcon:     'ic_notification',
-        color:         '#3b82f6',
-        pressAction:   { id: 'default', launchActivity: 'default' },
-        showTimestamp: true,
-      },
-      ios: {
-        sound: 'default',
-        foregroundPresentationOptions: { alert: true, badge: true, sound: true },
-      },
-      data: { pillId: pill._id },
-    },
-    {
-      type:            TriggerType.TIMESTAMP,
-      timestamp:       nextOccurrence(hours, minutes, -10),
-      repeatFrequency: RepeatFrequency.DAILY,
-      alarmManager: {
-        type:           ALARM_TYPE_SET_ALARM_CLOCK, // ← raw number 3
-        allowWhileIdle: true,
-      },
-    }
-  );
-}
-
-// ── Real alarm at exact time ──────────────────────────────
-
+/**
+ * Schedule all real alarms for a pill.
+ * One per entry in pill.alarmTimes[].
+ * Falls back to pill.alarmTime (legacy single-time) if no array.
+ */
 export async function scheduleRealAlarm(pill) {
-  const { hours, minutes } = parseTime(pill.alarmTime);
-  const sound              = pill.alarmTone || 'alarm_classic';
+  // Support both new array format and legacy single string
+  const times = pill.alarmTimes?.length > 0
+    ? pill.alarmTimes
+    : pill.alarmTime
+      ? [pill.alarmTime]
+      : [];
 
-  await notifee.createTriggerNotification(
-    {
-      id:    `${pill._id}-alarm`,
-      title: `🔔 Take ${pill.name} now`,
-      body:  `${pill.dosage}  ·  ${pill.frequency}`,
-      android: {
-        channelId:        ALARM_CHANNEL_ID,
-        importance:       AndroidImportance.HIGH,
-        category:         AndroidCategory.ALARM,
-        visibility:       AndroidVisibility.PUBLIC,
-        smallIcon:        'ic_notification',
-        color:            '#ef4444',
-        sound:            sound,
-        vibrationPattern: [300, 500, 200, 500, 200, 500], // all > 0
+  if (times.length === 0) {
+    console.warn(`scheduleRealAlarm: no alarm times for ${pill.name}`);
+    return;
+  }
 
-        fullScreenAction: {
-          id:             'default',
-          launchActivity: 'default',
+  for (let i = 0; i < times.length; i++) {
+    const timeStr          = times[i];
+    const { hours, minutes } = parseTime(timeStr);
+
+    const doseLabel = times.length > 1 ? `  ·  Dose ${i + 1}/${times.length}` : '';
+
+    await notifee.createTriggerNotification(
+      {
+        id:    `${pill._id}-alarm-${i}`,
+        title: `🔔 Take ${pill.name} now`,
+        body:  `${pill.dosage}  ·  ${pill.frequency}${doseLabel}`,
+        android: {
+          channelId:  ALARM_CHANNEL_ID,
+          importance: AndroidImportance.HIGH,
+          category:   AndroidCategory.ALARM,
+          visibility: AndroidVisibility.PUBLIC,
+          smallIcon:  'ic_notification',
+          color:      '#ef4444',
+
+          // DO NOT set sound here — Android uses CHANNEL sound after first install.
+          // Setting it here with a different value causes silent alarms.
+
+          vibrationPattern: [300, 500, 200, 500, 200, 500],
+
+          // Wakes screen → launches MainActivity → AlarmScreen shows
+          fullScreenAction: {
+            id:             'default',
+            launchActivity: 'default',
+          },
+
+          ongoing:       true,   // cannot swipe away
+          autoCancel:    false,  // tapping does NOT dismiss
+          showTimestamp: true,
+          pressAction:   { id: 'default', launchActivity: 'default' },
+
+          actions: [
+            { title: '✅ Taken',        pressAction: { id: 'taken'  } },
+            { title: '⏰ Snooze 5 min', pressAction: { id: 'snooze' } },
+          ],
         },
+        ios: {
+          sound:             pill.alarmTone || 'alarm_classic.mp3',
+          critical:          true,
+          criticalVolume:    1.0,
+          interruptionLevel: 'critical',
+          categoryId:        'med-alarm',
+          foregroundPresentationOptions: { alert: true, badge: true, sound: true },
+        },
+        data: {
+          pillId:    pill._id,
+          pill:      JSON.stringify(pill),
+          slotIndex: String(i),
+          type:      'alarm',  // AlarmScreen checks this
+        },
+      },
+      {
+        type:            TriggerType.TIMESTAMP,
+        timestamp:       nextOccurrence(hours, minutes, 0),
+        repeatFrequency: RepeatFrequency.DAILY,
+        alarmManager: {
+          type:           ALARM_TYPE_SET_ALARM_CLOCK,
+          allowWhileIdle: true,
+        },
+      }
+    );
 
-        ongoing:       true,
-        autoCancel:    false,
-        showTimestamp: true,
-        pressAction:   { id: 'default', launchActivity: 'default' },
-
-        actions: [
-          { title: '✅ Taken',        pressAction: { id: 'taken'  } },
-          { title: '⏰ Snooze 5 min', pressAction: { id: 'snooze' } },
-        ],
-      },
-      ios: {
-        sound:             sound,
-        critical:          true,
-        criticalVolume:    1.0,
-        interruptionLevel: 'critical',
-        categoryId:        'med-alarm',
-        foregroundPresentationOptions: { alert: true, badge: true, sound: true },
-      },
-      data: {
-        pillId: pill._id,
-        pill:   JSON.stringify(pill),
-      },
-    },
-    {
-      type:            TriggerType.TIMESTAMP,
-      timestamp:       nextOccurrence(hours, minutes, 0),
-      repeatFrequency: RepeatFrequency.DAILY,
-      alarmManager: {
-        type:           ALARM_TYPE_SET_ALARM_CLOCK, // ← raw number 3
-        allowWhileIdle: true,
-      },
-    }
-  );
+    console.log(`✅ Alarm ${i + 1}/${times.length}: ${pill.name} @ ${timeStr}`);
+  }
 }

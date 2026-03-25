@@ -105,7 +105,7 @@ export function AIChatInterface({ onClose, onRecommendationsGenerated, userName 
     {
       id: 1,
       type: 'bot',
-      text: `Hello ${userName || 'there'}! 👋 I'm your AI health assistant.\n\n` +
+      text: `Hello ${userName || 'there'}! 👋 I'm your health assistant.\n\n` +
             `Please describe your symptoms separated by commas.\n\n` +
             `For example:\n` +
             `"fever, headache, fatigue"\n` +
@@ -325,7 +325,7 @@ export function AIChatInterface({ onClose, onRecommendationsGenerated, userName 
             <Brain size={22} color="#fff" />
           </View>
           <View>
-            <Text style={styles.headerTitle}>AI Health Assistant</Text>
+            <Text style={styles.headerTitle}>Health Assistant</Text>
             <View style={styles.statusRow}>
               {connectionStatus.isConnected
                 ? <Wifi    size={11} color="#10b981" />
