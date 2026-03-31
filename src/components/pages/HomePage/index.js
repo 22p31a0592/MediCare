@@ -15,7 +15,7 @@ import { MedicationListHeader }      from './components/MedicationListHeader';
 import { MedicationCard }            from './components/MedicationCard';
 import { EmptyState }                from './components/EmptyState';
 
-import { AIChatInterface } from '../../modals/AIChatInterface';
+import { AIChatInterface } from '../../../components/modals/AIChatInterface/index';
 
 export function HomePage({
   pills,

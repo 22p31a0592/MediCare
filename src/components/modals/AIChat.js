@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -9,12 +9,10 @@ import {
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
-  Alert,
 } from 'react-native';
 import {
   Brain, Send, User, Bot, AlertCircle,
-  X, Wifi, WifiOff, RefreshCw,
-  Pill, Shield, Activity,
+  X, Wifi, WifiOff, RefreshCw, Activity,
 } from 'lucide-react-native';
 import axios from 'axios';
 
@@ -22,17 +20,9 @@ import { API_BASE_URL } from '../../config/api';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
-/**
- * Backend sometimes returns medications/diet as a stringified Python list:
- *   "['Bronchodilators', 'Inhaled corticosteroids']"
- * This function converts that into a clean JS array of strings.
- */
 function parseBackendList(raw) {
   if (!raw) return [];
-
-  // Already a JS array
   if (Array.isArray(raw)) {
-    // Each element might itself be a stringified list — flatten
     return raw.flatMap((item) => {
       if (typeof item === 'string' && item.startsWith('[')) {
         return parseStringifiedPythonList(item);
@@ -40,24 +30,19 @@ function parseBackendList(raw) {
       return [item];
     }).filter(Boolean);
   }
-
-  // Plain string
   if (typeof raw === 'string') {
     if (raw.startsWith('[')) return parseStringifiedPythonList(raw);
     return raw.split(',').map((s) => s.trim()).filter(Boolean);
   }
-
   return [];
 }
 
 function parseStringifiedPythonList(str) {
   try {
-    // Replace single quotes with double quotes to make it valid JSON
     const json = str.replace(/'/g, '"');
     const parsed = JSON.parse(json);
     return Array.isArray(parsed) ? parsed.map((s) => String(s).trim()) : [];
   } catch {
-    // Fallback: strip brackets and split
     return str
       .replace(/[\[\]']/g, '')
       .split(',')
@@ -66,11 +51,6 @@ function parseStringifiedPythonList(str) {
   }
 }
 
-/**
- * Build the formatted chat message text from the backend response.
- * Shows: predicted disease, confidence, medications, precautions.
- * Diet & exercise are NEVER shown here — they go to their own pages.
- */
 function buildBotMessage(data) {
   const disease     = data.disease     || 'Unknown';
   const confidence  = data.confidence  || 0;
@@ -94,8 +74,39 @@ function buildBotMessage(data) {
   }
 
   text += `ℹ️ Diet & exercise recommendations have been sent to your Diet and Exercise pages.`;
-
   return text.trim();
+}
+
+// ─── Human-readable error from axios error ──────────────────────────────────
+function parseAxiosError(error, context = 'request') {
+  // Timeout
+  if (error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT') {
+    return `⏱️ Request timed out.\n\nThe server took too long to respond. Make sure your Python server is running and try again.`;
+  }
+  // No network / server not reachable
+  if (
+    error.message?.includes('Network Error') ||
+    error.message?.includes('network error') ||
+    error.code === 'ERR_NETWORK' ||
+    !error.response
+  ) {
+    return `📡 Cannot reach server.\n\nCheck that your Python server is running at:\n${API_BASE_URL}\n\nCommand: python app.py`;
+  }
+  // HTTP error response from server
+  if (error.response) {
+    const status = error.response.status;
+    const serverMsg = error.response.data?.error
+                   || error.response.data?.message
+                   || error.response.data?.detail
+                   || null;
+
+    if (status === 400) return `❌ Bad request: ${serverMsg || 'Invalid input sent to server.'}`;
+    if (status === 404) return `❌ API endpoint not found (404).\n\nCheck your backend routes — expected: POST /api/chat`;
+    if (status === 500) return `🔥 Server error (500).\n\n${serverMsg || 'Your Python server crashed. Check the terminal for the traceback.'}`;
+    if (status === 503) return `🚫 Server unavailable (503). It may still be loading.`;
+    return `❌ Server returned error ${status}${serverMsg ? ': ' + serverMsg : '.'}`;
+  }
+  return `❌ Unexpected error: ${error.message}`;
 }
 
 // ─── Component ──────────────────────────────────────────────────────────────
@@ -105,64 +116,102 @@ export function AIChatInterface({ onClose, onRecommendationsGenerated, userName 
     {
       id: 1,
       type: 'bot',
-      text: `Hello ${userName || 'there'}! 👋 I'm your health assistant.\n\n` +
-            `Please describe your symptoms separated by commas.\n\n` +
-            `For example:\n` +
-            `"fever, headache, fatigue"\n` +
-            `"cough, chest pain, shortness of breath"\n\n` +
-            `I'll predict the likely condition and show medications, precautions, and send diet & exercise plans to your other tabs.`,
+      text:
+        `Hello ${userName || 'there'}! 👋 I'm your health assistant.\n\n` +
+        `Please describe your symptoms separated by commas.\n\n` +
+        `For example:\n` +
+        `"fever, headache, fatigue"\n` +
+        `"cough, chest pain, shortness of breath"\n\n` +
+        `I'll predict the likely condition and show medications, precautions, ` +
+        `and send diet & exercise plans to your other tabs.`,
       timestamp: new Date(),
     },
   ]);
+
   const [inputText,        setInputText]        = useState('');
   const [isLoading,        setIsLoading]        = useState(false);
   const [isTyping,         setIsTyping]         = useState(false);
+  const [retryCount,       setRetryCount]       = useState(0);
+
+  // ── FIX 1: Start as unknown (null) not disconnected ─────────────────────
+  // Previously started isConnected:false + testing:true which immediately
+  // showed the "not connected" banner and triggered an Alert popup on open.
   const [connectionStatus, setConnectionStatus] = useState({
-    isConnected: false,
+    isConnected: null,   // null = not yet checked (no banner shown)
     testing:     true,
-    message:     'Testing connection...',
+    message:     'Connecting...',
   });
-  const scrollViewRef = useRef(null);
+
+  const scrollViewRef  = useRef(null);
+  const retryTimerRef  = useRef(null);
 
   useEffect(() => {
     scrollViewRef.current?.scrollToEnd({ animated: true });
   }, [messages, isTyping]);
 
-  useEffect(() => { checkConnection(); }, []);
+  useEffect(() => {
+    checkConnection();
+    return () => {
+      if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
+    };
+  }, []);
 
-  // ── Connection check ───────────────────────────────────────────────────────
+  // ── FIX 2: Faster connection check — 3s timeout, no Alert popup ─────────
+  // Old: 5s timeout + Alert.alert popup that blocked the UI.
+  // New: 3s timeout, silent inline status update only.
+  //      If server is healthy but doesn't return success/status fields,
+  //      we still mark connected (any 2xx is good enough).
+  const checkConnection = useCallback(async () => {
+    setConnectionStatus((prev) => ({ ...prev, testing: true, message: 'Connecting...' }));
 
-  const checkConnection = async () => {
-    setConnectionStatus({ isConnected: false, testing: true, message: 'Testing connection...' });
     try {
-      const response = await axios.get(`${API_BASE_URL}/api/health`, { timeout: 5000 });
-      // app.py returns { status: "healthy" } — check that, not .success
-      if (response.data.status === 'healthy' || response.data.success) {
+      const response = await axios.get(`${API_BASE_URL}/api/health`, {
+        timeout: 3000,   // FIX: was 5000ms — reduced to 3000ms for faster feedback
+      });
+
+      // Accept any 2xx response — some backends return {} or { status:'ok' }
+      const d = response.data;
+      const ok = d?.status === 'healthy'
+              || d?.status === 'ok'
+              || d?.success === true
+              || response.status === 200;
+
+      if (ok) {
         setConnectionStatus({ isConnected: true, testing: false, message: 'Connected' });
+        setRetryCount(0);
+      } else {
+        // Server replied but with unexpected body — treat as connected anyway
+        setConnectionStatus({ isConnected: true, testing: false, message: 'Connected' });
+        setRetryCount(0);
       }
     } catch (error) {
-      let errorMessage = 'Connection failed';
-      if (error.code === 'ECONNABORTED') {
-        errorMessage = 'Connection timeout';
-      } else if (error.message.includes('Network')) {
-        errorMessage = 'Cannot reach server';
-      } else {
-        errorMessage = error.message;
+      // FIX 3: NO Alert.alert() — was popping up on every open.
+      // Show inline error banner instead (much less disruptive).
+      let msg = 'Cannot reach server';
+      if (error.code === 'ECONNABORTED' || error.code === 'ETIMEDOUT') {
+        msg = 'Connection timeout';
+      } else if (error.response) {
+        // Server replied with error — it IS reachable, just unhealthy
+        // Still mark connected so user can try sending
+        setConnectionStatus({ isConnected: true, testing: false, message: 'Server issue' });
+        return;
       }
-      setConnectionStatus({ isConnected: false, testing: false, message: errorMessage });
-      Alert.alert(
-        '⚠️ Connection Error',
-        `Cannot connect to backend:\n${API_BASE_URL}\n\nMake sure your Python server is running (python app.py).`,
-        [
-          { text: 'Retry',           onPress: checkConnection },
-          { text: 'Continue Anyway', style: 'cancel' },
-        ]
-      );
+      setConnectionStatus({ isConnected: false, testing: false, message: msg });
+
+      // FIX 4: Auto-retry once after 4 seconds instead of asking user
+      if (retryCount < 1) {
+        setRetryCount((n) => n + 1);
+        retryTimerRef.current = setTimeout(() => {
+          checkConnection();
+        }, 4000);
+      }
     }
-  };
+  }, [retryCount]);
 
-  // ── Send message ───────────────────────────────────────────────────────────
-
+  // ── FIX 5: sendMessage — better error handling + success check fix ────────
+  // Old bug: `if (!response.data.success)` threw an error even when the
+  // backend returned a valid disease result without a `success` field.
+  // New: only throw if there's clearly NO useful data in the response.
   const sendMessage = async (overrideText) => {
     const text = (overrideText || inputText).trim();
     if (!text || isLoading) return;
@@ -183,21 +232,24 @@ export function AIChatInterface({ onClose, onRecommendationsGenerated, userName 
       const response = await axios.post(
         `${API_BASE_URL}/api/chat`,
         { message: text },
-        { headers: { 'Content-Type': 'application/json' }, timeout: 30000 }
+        {
+          headers: { 'Content-Type': 'application/json' },
+          timeout: 30000,
+        }
       );
 
       setIsTyping(false);
       setConnectionStatus({ isConnected: true, testing: false, message: 'Connected' });
 
-      if (!response.data.success) {
-        throw new Error(response.data.error || 'Server error');
-      }
-
       const data = response.data;
 
-      // ── Build the chat message (disease + meds + precautions ONLY) ─────────
-      const botText = buildBotMessage(data);
+      // FIX 5: Only fail if there's genuinely no disease data at all.
+      // Old code threw on `!data.success` even when disease was present.
+      if (data.success === false && !data.disease) {
+        throw new Error(data.error || data.message || 'Server returned an error.');
+      }
 
+      const botText = buildBotMessage(data);
       const botMessage = {
         id:         Date.now() + 1,
         type:       'bot',
@@ -209,41 +261,42 @@ export function AIChatInterface({ onClose, onRecommendationsGenerated, userName 
 
       setMessages((prev) => [...prev, botMessage]);
 
-      // ── Pass diet & exercise to parent (Diet/Exercise tabs) ───────────────
-      // These are NEVER shown in chat — they go directly to the other pages.
       if (onRecommendationsGenerated) {
         const diet     = parseBackendList(data.ai_suggestions?.diet);
         const exercise = parseBackendList(data.ai_suggestions?.exercise);
 
         onRecommendationsGenerated({
-          symptoms:               text.split(',').map((s) => s.trim()),
-          conditions:             [{ name: data.disease }],
-          dietRecommendations:    diet,
+          symptoms:                text.split(',').map((s) => s.trim()),
+          conditions:              [{ name: data.disease }],
+          dietRecommendations:     diet,
           exerciseRecommendations: exercise,
-          confidence:             data.confidence || 0,
-          chatHistory:            [...messages, userMessage, botMessage],
-          timestamp:              new Date().toISOString(),
+          confidence:              data.confidence || 0,
+          chatHistory:             [...messages, userMessage, botMessage],
+          timestamp:               new Date().toISOString(),
         });
       }
 
     } catch (error) {
       setIsTyping(false);
-      setConnectionStatus({ isConnected: false, testing: false, message: 'Disconnected' });
+      setConnectionStatus((prev) => ({
+        ...prev,
+        isConnected: error.response ? true : false,
+        testing: false,
+        message: error.response ? 'Server issue' : 'Disconnected',
+      }));
 
-      let errorText = '⚠️ Error:\n\n';
-      if (error.code === 'ECONNABORTED') {
-        errorText += 'Request timed out.';
-      } else if (error.message.includes('Network')) {
-        errorText += `Cannot reach server at:\n${API_BASE_URL}\n\nCheck if Python server is running.`;
-      } else if (error.response) {
-        errorText += `Server error ${error.response.status}: ${error.response.data?.error || error.message}`;
-      } else {
-        errorText += error.message;
-      }
+      // FIX 6: Use structured error messages — no more raw JS error dumps
+      const errorText = parseAxiosError(error);
 
       setMessages((prev) => [
         ...prev,
-        { id: Date.now() + 1, type: 'bot', text: errorText, timestamp: new Date(), isError: true },
+        {
+          id:        Date.now() + 1,
+          type:      'bot',
+          text:      errorText,
+          timestamp: new Date(),
+          isError:   true,
+        },
       ]);
     } finally {
       setIsLoading(false);
@@ -257,7 +310,10 @@ export function AIChatInterface({ onClose, onRecommendationsGenerated, userName 
     return (
       <View
         key={message.id}
-        style={[styles.messageContainer, isBot ? styles.botContainer : styles.userContainer]}
+        style={[
+          styles.messageContainer,
+          isBot ? styles.botContainer : styles.userContainer,
+        ]}
       >
         {isBot && (
           <View style={styles.botAvatar}>
@@ -274,7 +330,6 @@ export function AIChatInterface({ onClose, onRecommendationsGenerated, userName 
             {message.text}
           </Text>
 
-          {/* Disease + confidence badge on bot messages */}
           {message.disease && (
             <View style={styles.resultRow}>
               <View style={styles.diseaseBadge}>
@@ -287,7 +342,6 @@ export function AIChatInterface({ onClose, onRecommendationsGenerated, userName 
             </View>
           )}
 
-          {/* Diet & exercise redirect notice */}
           {message.disease && (
             <View style={styles.dietNoticeBadge}>
               <Text style={styles.dietNoticeText}>
@@ -312,13 +366,18 @@ export function AIChatInterface({ onClose, onRecommendationsGenerated, userName 
 
   // ── Render ─────────────────────────────────────────────────────────────────
 
+  // FIX 7: Only show the disconnected banner when we KNOW we're offline.
+  // null (not yet checked) = no banner. false = show banner.
+  const showDisconnectedBanner =
+    connectionStatus.isConnected === false && !connectionStatus.testing;
+
   return (
     <KeyboardAvoidingView
       style={styles.container}
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
       keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
     >
-      {/* Header */}
+      {/* ── Header ─────────────────────────────────────── */}
       <View style={styles.header}>
         <View style={styles.headerLeft}>
           <View style={styles.headerIcon}>
@@ -327,18 +386,27 @@ export function AIChatInterface({ onClose, onRecommendationsGenerated, userName 
           <View>
             <Text style={styles.headerTitle}>Health Assistant</Text>
             <View style={styles.statusRow}>
-              {connectionStatus.isConnected
-                ? <Wifi    size={11} color="#10b981" />
-                : <WifiOff size={11} color="#ef4444" />
-              }
+              {connectionStatus.testing ? (
+                <ActivityIndicator size={10} color="rgba(255,255,255,0.8)" />
+              ) : connectionStatus.isConnected ? (
+                <Wifi size={11} color="#10b981" />
+              ) : (
+                <WifiOff size={11} color="#ef4444" />
+              )}
               <Text style={styles.headerSub}>
-                {isTyping ? 'Analysing symptoms...' : connectionStatus.message}
+                {isTyping
+                  ? 'Analysing symptoms...'
+                  : connectionStatus.message}
               </Text>
             </View>
           </View>
         </View>
         <View style={styles.headerRight}>
-          <TouchableOpacity onPress={checkConnection} style={styles.iconBtn} disabled={connectionStatus.testing}>
+          <TouchableOpacity
+            onPress={checkConnection}
+            style={styles.iconBtn}
+            disabled={connectionStatus.testing}
+          >
             <RefreshCw size={18} color="#fff" />
           </TouchableOpacity>
           <TouchableOpacity onPress={onClose} style={styles.iconBtn}>
@@ -347,11 +415,13 @@ export function AIChatInterface({ onClose, onRecommendationsGenerated, userName 
         </View>
       </View>
 
-      {/* Disconnected banner */}
-      {!connectionStatus.isConnected && !connectionStatus.testing && (
+      {/* ── Disconnected banner — inline, no Alert popup ── */}
+      {showDisconnectedBanner && (
         <TouchableOpacity style={styles.errorBanner} onPress={checkConnection}>
           <AlertCircle size={15} color="#dc2626" />
-          <Text style={styles.errorBannerText}>Not connected — tap to retry</Text>
+          <Text style={styles.errorBannerText}>
+            Not connected — tap to retry
+          </Text>
         </TouchableOpacity>
       )}
 
@@ -362,7 +432,7 @@ export function AIChatInterface({ onClose, onRecommendationsGenerated, userName 
         </View>
       )}
 
-      {/* Messages */}
+      {/* ── Messages ───────────────────────────────────── */}
       <ScrollView
         ref={scrollViewRef}
         style={styles.messages}
@@ -387,7 +457,7 @@ export function AIChatInterface({ onClose, onRecommendationsGenerated, userName 
         )}
       </ScrollView>
 
-      {/* Input area */}
+      {/* ── Input area ─────────────────────────────────── */}
       <View style={styles.inputArea}>
         <View style={styles.inputRow}>
           <TextInput
@@ -401,7 +471,10 @@ export function AIChatInterface({ onClose, onRecommendationsGenerated, userName 
             editable={!isLoading}
           />
           <TouchableOpacity
-            style={[styles.sendBtn, (!inputText.trim() || isLoading) && styles.sendBtnOff]}
+            style={[
+              styles.sendBtn,
+              (!inputText.trim() || isLoading) && styles.sendBtnOff,
+            ]}
             onPress={() => sendMessage()}
             disabled={!inputText.trim() || isLoading}
           >
@@ -412,19 +485,19 @@ export function AIChatInterface({ onClose, onRecommendationsGenerated, userName 
           </TouchableOpacity>
         </View>
 
-        {/* Hint */}
-        <Text style={styles.hint}>
-          💡 Enter symptoms separated by commas
-        </Text>
+        <Text style={styles.hint}>💡 Enter symptoms separated by commas</Text>
 
-        {/* Quick symptom examples */}
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.quickRow}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={styles.quickRow}
+        >
           {[
-            { label: '🤒 Fever & Cold',    text: 'fever, chills, runny nose, cough' },
-            { label: '🤕 Head & Body',     text: 'headache, fatigue, muscle pain, nausea' },
-            { label: '🫁 Breathing',       text: 'cough, shortness of breath, chest pain, wheezing' },
-            { label: '🤢 Stomach',         text: 'nausea, vomiting, abdominal pain, diarrhea' },
-            { label: '❤️ Heart',           text: 'chest pain, palpitations, dizziness, sweating' },
+            { label: '🤒 Fever & Cold',  text: 'fever, chills, runny nose, cough' },
+            { label: '🤕 Head & Body',   text: 'headache, fatigue, muscle pain, nausea' },
+            { label: '🫁 Breathing',     text: 'cough, shortness of breath, chest pain, wheezing' },
+            { label: '🤢 Stomach',       text: 'nausea, vomiting, abdominal pain, diarrhea' },
+            { label: '❤️ Heart',         text: 'chest pain, palpitations, dizziness, sweating' },
           ].map((item) => (
             <TouchableOpacity
               key={item.label}
@@ -444,9 +517,8 @@ export function AIChatInterface({ onClose, onRecommendationsGenerated, userName 
 // ─── Styles ──────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
-  container:   { flex: 1, backgroundColor: '#f3f4f6' },
+  container: { flex: 1, backgroundColor: '#f3f4f6' },
 
-  // Header
   header: {
     backgroundColor:   '#7c3aed',
     flexDirection:     'row',
@@ -474,13 +546,13 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.15)',
   },
 
-  // Banners
   errorBanner: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
     backgroundColor: '#fee2e2', padding: 10,
     borderBottomWidth: 1, borderBottomColor: '#fca5a5',
   },
   errorBannerText: { fontSize: 13, color: '#991b1b', fontWeight: '500' },
+
   debugBanner: {
     backgroundColor: '#fef9c3', padding: 6,
     borderBottomWidth: 1, borderBottomColor: '#fbbf24',
@@ -490,7 +562,6 @@ const styles = StyleSheet.create({
     fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
   },
 
-  // Messages
   messages:        { flex: 1 },
   messagesContent: { padding: 14, paddingBottom: 6 },
 
@@ -523,7 +594,6 @@ const styles = StyleSheet.create({
   userText:    { color: '#fff' },
   timestamp:   { fontSize: 10, color: '#9ca3af', marginTop: 6, alignSelf: 'flex-end' },
 
-  // Result badges
   resultRow: {
     flexDirection: 'row', alignItems: 'center',
     flexWrap: 'wrap', gap: 6, marginTop: 10,
@@ -545,7 +615,6 @@ const styles = StyleSheet.create({
   },
   dietNoticeText: { fontSize: 11, color: '#15803d', fontWeight: '500' },
 
-  // Typing
   typingBubble: {
     backgroundColor: '#fff', padding: 16, borderRadius: 16, borderBottomLeftRadius: 4,
     shadowColor: '#000', shadowOffset: { width: 0, height: 1 },
@@ -554,14 +623,13 @@ const styles = StyleSheet.create({
   typingDots: { flexDirection: 'row', gap: 6 },
   dot: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#7c3aed', opacity: 0.5 },
 
-  // Input area
   inputArea: {
     backgroundColor: '#fff',
     borderTopWidth: 1, borderTopColor: '#e5e7eb',
     paddingHorizontal: 14, paddingTop: 10,
     paddingBottom: Platform.OS === 'ios' ? 28 : 12,
   },
-  inputRow:  { flexDirection: 'row', alignItems: 'flex-end', gap: 10, marginBottom: 6 },
+  inputRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 10, marginBottom: 6 },
   input: {
     flex: 1, backgroundColor: '#f9fafb',
     borderRadius: 22, paddingHorizontal: 14, paddingVertical: 11,

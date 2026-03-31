@@ -1,15 +1,20 @@
 /**
  * modals/AIChatInterface/components/ChatInput.js
- * ─────────────────────────────────────────────────────────
- * Text input row + 3 quick-action buttons.
- * Quick actions are limited to the 3 allowed topics only.
- * ─────────────────────────────────────────────────────────
+ *
+ * CHANGED:
+ *  - Quick action chips now show exact disease-category symptoms
+ *    that the backend ML model recognises (underscore format).
+ *  - Scrollable horizontal chips instead of 3 fixed-width buttons.
+ *  - Placeholder updated with underscore tip.
  */
 
-import React       from 'react';
-import { View, TextInput, TouchableOpacity, StyleSheet, Platform, ActivityIndicator } from 'react-native';
-import { Text }    from 'react-native';
-import { Send }    from 'lucide-react-native';
+import React from 'react';
+import {
+  View, TextInput, TouchableOpacity,
+  Text, StyleSheet, Platform,
+  ActivityIndicator, ScrollView,
+} from 'react-native';
+import { Send } from 'lucide-react-native';
 import { QUICK_ACTIONS } from '../constants/chatConstants';
 
 export function ChatInput({ inputText, setInputText, onSend, isLoading }) {
@@ -19,7 +24,7 @@ export function ChatInput({ inputText, setInputText, onSend, isLoading }) {
       <View style={styles.inputRow}>
         <TextInput
           style={styles.input}
-          placeholder="Describe symptoms or ask a health question…"
+          placeholder="e.g. chest_pain, high_fever, cough…"
           placeholderTextColor="#9ca3af"
           value={inputText}
           onChangeText={setInputText}
@@ -39,19 +44,24 @@ export function ChatInput({ inputText, setInputText, onSend, isLoading }) {
         </TouchableOpacity>
       </View>
 
-      {/* 3 topic quick-action buttons */}
-      <View style={styles.quickRow}>
+      {/* Scrollable symptom quick-action chips */}
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        style={styles.scroll}
+        contentContainerStyle={styles.scrollContent}
+      >
         {QUICK_ACTIONS.map((action) => (
           <TouchableOpacity
             key={action.key}
-            style={styles.quickBtn}
+            style={styles.chip}
             onPress={() => onSend(action.text)}
             disabled={isLoading}
           >
-            <Text style={styles.quickBtnText}>{action.label}</Text>
+            <Text style={styles.chipText}>{action.label}</Text>
           </TouchableOpacity>
         ))}
-      </View>
+      </ScrollView>
     </View>
   );
 }
@@ -66,19 +76,20 @@ const styles = StyleSheet.create({
     paddingBottom:     Platform.OS === 'ios' ? 26 : 12,
   },
   inputRow: {
-    flexDirection: 'row', alignItems: 'flex-end', gap: 10, marginBottom: 10,
+    flexDirection: 'row', alignItems: 'flex-end',
+    gap: 10, marginBottom: 10,
   },
   input: {
-    flex:             1,
-    backgroundColor:  '#f9fafb',
-    borderRadius:     22,
+    flex:              1,
+    backgroundColor:   '#f9fafb',
+    borderRadius:      22,
     paddingHorizontal: 14,
-    paddingVertical:  11,
-    fontSize:         14,
-    color:            '#111827',
-    maxHeight:        100,
-    borderWidth:      1,
-    borderColor:      '#e5e7eb',
+    paddingVertical:   11,
+    fontSize:          14,
+    color:             '#111827',
+    maxHeight:         100,
+    borderWidth:       1,
+    borderColor:       '#e5e7eb',
   },
   sendBtn: {
     width: 44, height: 44, borderRadius: 22,
@@ -88,15 +99,15 @@ const styles = StyleSheet.create({
   },
   sendBtnOff: { backgroundColor: '#d1d5db', elevation: 0 },
 
-  quickRow: { flexDirection: 'row', gap: 8 },
-  quickBtn: {
-    flex: 1,
-    backgroundColor: '#f3f4f6',
-    paddingVertical: 8,
-    borderRadius: 10,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
+  scroll:        { flexDirection: 'row' },
+  scrollContent: { gap: 8, paddingRight: 4 },
+  chip: {
+    backgroundColor:   '#eff6ff',
+    paddingVertical:   7,
+    paddingHorizontal: 13,
+    borderRadius:      10,
+    borderWidth:       1,
+    borderColor:       '#bfdbfe',
   },
-  quickBtnText: { fontSize: 11, color: '#374151', fontWeight: '600' },
+  chipText: { fontSize: 12, color: '#1d4ed8', fontWeight: '600' },
 });

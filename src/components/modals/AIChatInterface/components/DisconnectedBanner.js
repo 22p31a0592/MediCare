@@ -9,7 +9,7 @@
 import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, Platform } from 'react-native';
 import { AlertCircle } from 'lucide-react-native';
-import { API_BASE_URL } from '../../../config/api';
+import { API_BASE_URL } from '../../../../config/api';
 
 export function DisconnectedBanner({ onRetry }) {
   return (

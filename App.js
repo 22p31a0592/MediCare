@@ -1,17 +1,48 @@
 /**
  * App.js  ← ROOT ENTRY POINT
  *
- * ── ALARM CHANGES ────────────────────────────────────────
- *  Supports alarm firing in ALL 3 app states:
- *   1. App OPEN (foreground)  → onForegroundEvent DELIVERED
- *   2. App BACKGROUND         → onForegroundEvent DELIVERED
- *   3. App KILLED/CLOSED      → getInitialNotification() on cold launch
+ * ── ALARM HANDLING — ALL 3 APP STATES ───────────────────
  *
- *  Also handles notification action button presses (Taken/Snooze)
- *  when app is in background via onBackgroundEvent (registered in index.js).
+ *  State 1 — App OPEN (foreground)
+ *    notifee.onForegroundEvent DELIVERED → setActiveAlarm → AlarmScreen shows
+ *
+ *  State 2 — App BACKGROUND
+ *    fullScreenAction wakes screen → DELIVERED event fires
+ *    → setActiveAlarm → AlarmScreen shows.
+ *
+ *  State 3 — App KILLED
+ *    fullScreenAction cold-launches MainActivity.
+ *    getInitialNotification() detects alarm → setActiveAlarm → AlarmScreen.
+ *    Action button presses handled by onBackgroundEvent in index.js.
+ *
+ *  Recovery — App brought to foreground manually
+ *    AppState 'active' listener checks getDisplayedNotifications()
+ *    and restores AlarmScreen if a pending alarm is still showing.
+ *
+ * ── BUGS FIXED ───────────────────────────────────────────
+ *  1. Removed duplicate AlarmAlertModal — AlarmScreen already handles this.
+ *     AlarmAlertModal referenced handleMarkPillTaken which doesn't exist
+ *     → "property error doesn't exist" crash.
+ *
+ *  2. Removed all commented-out dead code / broken useEffect structure.
+ *     The mismatched comment blocks left a broken useEffect with an
+ *     unclosed scope — the return unsub was inside the wrong block.
+ *
+ *  3. Added activeAlarmRef so AppState listener always reads latest value
+ *     without stale closure.
+ *
+ *  4. parsePillFromNotification now wraps JSON.parse in try/catch.
+ *     Raw JSON.parse(data.pill) without guard crashed on malformed data.
+ *
+ *  5. handleAlarmTaken now uses handleMarkTaken (which exists) not
+ *     handleMarkPillTaken (which does not).
+ *
+ *  6. onForegroundEvent also handles ACTION_PRESS (Taken/Snooze button
+ *     taps while app is open) and PRESS (notification banner tap).
+ * ─────────────────────────────────────────────────────────
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { View, StatusBar, AppState } from 'react-native';
 import notifee, { EventType } from '@notifee/react-native';
 
@@ -39,14 +70,14 @@ import { AlarmScreen }     from './src/services/NotificationService/Screeen/Alar
 import notificationService from './src/services/NotificationService';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Helper — safely parse pill JSON from notification data
+// FIX 4: Safe pill parser — never throws, always returns pill or null
 // ─────────────────────────────────────────────────────────────────────────────
 function parsePillFromNotification(data) {
   try {
     if (!data?.pill) return null;
     return typeof data.pill === 'string' ? JSON.parse(data.pill) : data.pill;
   } catch (e) {
-    console.error('[AlarmScreen] parsePillFromNotification error:', e);
+    console.error('[App] parsePillFromNotification error:', e);
     return null;
   }
 }
@@ -67,73 +98,67 @@ export default function App() {
     symptoms: [], conditions: [], chatHistory: [],
   });
 
-  // ── Active alarm state ────────────────────────────────
+  // ── Active alarm ──────────────────────────────────────
   const [activeAlarm, setActiveAlarm] = useState(null);
 
-  // ─────────────────────────────────────────────────────
-  // App init
-  // ─────────────────────────────────────────────────────
+  // FIX 3: Ref so AppState listener always reads latest alarm without stale closure
+  const activeAlarmRef = useRef(null);
+  activeAlarmRef.current = activeAlarm;
+
+  // ── App init ──────────────────────────────────────────
   useEffect(() => {
     const pillTakenCallback = createHandlePillTakenFromNotification(setPills);
+    notificationService.setOnPillTakenCallback(pillTakenCallback);
     initializeApp(
       setIsLoading, setUser, setPills, setShowNamePrompt,
       setAiRecommendations, setUserHealthData, pillTakenCallback,
     );
   }, []);
 
-  // ─────────────────────────────────────────────────────
-  // ALARM DETECTION — covers all 3 app states
-  // ─────────────────────────────────────────────────────
+  // ── Alarm detection — all 3 states ───────────────────
+  // FIX 2: Rewritten as one clean useEffect with no broken comment blocks.
   useEffect(() => {
-    // ── STATE 3: App was KILLED — alarm fullScreenIntent cold-launched app ──
+    // STATE 3: App was KILLED — fullScreenIntent cold-launched the app
     notifee.getInitialNotification().then((initial) => {
       if (initial?.notification?.data?.type === 'alarm') {
         const pill = parsePillFromNotification(initial.notification.data);
         if (pill) {
-          console.log('[AlarmScreen] Cold launch alarm detected:', pill.name);
+          console.log('[App] Cold-launch alarm:', pill.name);
           setActiveAlarm(pill);
         }
       }
     });
 
-    // ── STATE 1 & 2: App OPEN or BACKGROUND — alarm delivered ──
+    // STATE 1 & 2: App OPEN or BACKGROUND
     const unsub = notifee.onForegroundEvent(({ type, detail }) => {
-      const data = detail.notification?.data;
+      const data = detail?.notification?.data;
+      if (!data || data.type !== 'alarm') return;
 
-      // Alarm delivered (fires even when app is backgrounded)
-      if (type === EventType.DELIVERED && data?.type === 'alarm') {
+      // Alarm notification delivered → show AlarmScreen
+      if (type === EventType.DELIVERED) {
         const pill = parsePillFromNotification(data);
         if (pill) {
-          console.log('[AlarmScreen] Foreground/BG alarm delivered:', pill.name);
+          console.log('[App] Alarm delivered:', pill.name);
           setActiveAlarm(pill);
         }
-        return;
       }
 
-      // Action button pressed while app is in foreground
-      if (type === EventType.ACTION_PRESS && data?.type === 'alarm') {
-        const pill = parsePillFromNotification(data);
-        if (!pill) return;
-
-        if (detail.pressAction?.id === 'taken') {
-          console.log('[AlarmScreen] Taken pressed (foreground action)');
-          handleMarkTaken(pill._id).catch(console.error);
-          notificationService.cancelAlarm(pill._id, pill).catch(console.error);
-          setActiveAlarm(null);
-        } else if (detail.pressAction?.id === 'snooze') {
-          console.log('[AlarmScreen] Snooze pressed (foreground action)');
-          notificationService.snoozeAlarm(pill).catch(console.error);
-          setActiveAlarm(null);
-        }
-        return;
-      }
-
-      // App was in background, user tapped the notification banner → open alarm screen
-      if (type === EventType.PRESS && data?.type === 'alarm') {
+      // FIX 6: User tapped notification banner while app was backgrounded
+      if (type === EventType.PRESS) {
         const pill = parsePillFromNotification(data);
         if (pill) {
-          console.log('[AlarmScreen] Notification tapped from background:', pill.name);
+          console.log('[App] Notification tapped:', pill.name);
           setActiveAlarm(pill);
+        }
+      }
+
+      // FIX 6: Action button (Taken/Snooze) pressed while app is open
+      // eventHandlers.js does the actual work; we just dismiss AlarmScreen here
+      if (type === EventType.ACTION_PRESS) {
+        const pressId = detail.pressAction?.id;
+        if (pressId === 'taken' || pressId === 'snooze') {
+          console.log('[App] Action pressed in foreground:', pressId);
+          setActiveAlarm(null);
         }
       }
     });
@@ -141,46 +166,43 @@ export default function App() {
     return unsub;
   }, []);
 
-  // Re-check when app comes back to foreground (user may have dismissed via swipe etc.)
+  // ── Recovery: app brought to foreground manually ──────
   useEffect(() => {
     const sub = AppState.addEventListener('change', async (nextState) => {
-      if (nextState === 'active') {
-        // If there's no active alarm showing, check for any pending alarm notifications
-        if (!activeAlarm) {
-          try {
-            const displayed = await notifee.getDisplayedNotifications();
-            const alarmNotif = displayed.find(n => n.notification?.data?.type === 'alarm');
-            if (alarmNotif) {
-              const pill = parsePillFromNotification(alarmNotif.notification.data);
-              if (pill) {
-                console.log('[AlarmScreen] Recovered pending alarm on foreground:', pill.name);
-                setActiveAlarm(pill);
-              }
-            }
-          } catch (e) {
-            console.error('[AlarmScreen] AppState recovery error:', e);
+      if (nextState !== 'active') return;
+      if (activeAlarmRef.current) return; // already showing
+
+      try {
+        const displayed = await notifee.getDisplayedNotifications();
+        const alarmNotif = displayed.find(n => n.notification?.data?.type === 'alarm');
+        if (alarmNotif) {
+          const pill = parsePillFromNotification(alarmNotif.notification.data);
+          if (pill) {
+            console.log('[App] Recovered pending alarm:', pill.name);
+            setActiveAlarm(pill);
           }
         }
+      } catch (e) {
+        console.error('[App] AppState recovery error:', e);
       }
     });
     return () => sub.remove();
-  }, [activeAlarm]);
+  }, []);
 
-  // ─────────────────────────────────────────────────────
-  // ALARM ACTION HANDLERS
-  // ─────────────────────────────────────────────────────
+  // ── Alarm action handlers ─────────────────────────────
+  // FIX 5: Uses handleMarkTaken (exists) — not handleMarkPillTaken (doesn't exist)
   const handleAlarmTaken = async () => {
     if (!activeAlarm) return;
-    console.log('[AlarmScreen] handleAlarmTaken:', activeAlarm.name);
+    console.log('[App] handleAlarmTaken:', activeAlarm.name);
     try {
       await handleMarkTaken(activeAlarm._id);
       await notificationService.cancelAlarm(activeAlarm._id, activeAlarm);
-      // Cancel the displayed notification so it disappears from shade
+      // Also dismiss from notification shade
       const displayed = await notifee.getDisplayedNotifications();
       const match = displayed.find(n => n.notification?.data?.type === 'alarm');
       if (match) await notifee.cancelNotification(match.notification.id);
     } catch (e) {
-      console.error('[AlarmScreen] handleAlarmTaken error:', e);
+      console.error('[App] handleAlarmTaken error:', e);
     } finally {
       setActiveAlarm(null);
     }
@@ -188,28 +210,25 @@ export default function App() {
 
   const handleAlarmSnooze = async () => {
     if (!activeAlarm) return;
-    console.log('[AlarmScreen] handleAlarmSnooze:', activeAlarm.name);
+    console.log('[App] handleAlarmSnooze:', activeAlarm.name);
     try {
       await notificationService.snoozeAlarm(activeAlarm);
-      // Cancel current displayed notification
       const displayed = await notifee.getDisplayedNotifications();
       const match = displayed.find(n => n.notification?.data?.type === 'alarm');
       if (match) await notifee.cancelNotification(match.notification.id);
     } catch (e) {
-      console.error('[AlarmScreen] handleAlarmSnooze error:', e);
+      console.error('[App] handleAlarmSnooze error:', e);
     } finally {
       setActiveAlarm(null);
     }
   };
 
-  // ─────────────────────────────────────────────────────
-  // Handlers
-  // ─────────────────────────────────────────────────────
+  // ── Handlers ──────────────────────────────────────────
   const handleSetName    = createHandleSetName(setUser, setShowNamePrompt);
   const handleUpdateName = createHandleUpdateName(user, setUser, setShowEditName);
   const handleAddPill    = createHandleAddPill(pills, setPills, setShowAddPill);
   const handleDeletePill = createHandleDeletePill(pills, setPills);
-  const handleMarkTaken  = createHandleMarkPillTaken(setPills);
+  const handleMarkTaken  = createHandleMarkPillTaken(setPills);   // ← correct name
   const handleAIRecommendations      = createHandleAIRecommendations(setAiRecommendations, setUserHealthData);
   const handleClearAIRecommendations = createHandleClearAIRecommendations(setAiRecommendations, setUserHealthData);
   const handleReset = createHandleReset(
@@ -262,7 +281,10 @@ export default function App() {
         onCloseSettings={() => setShowSettings(false)}
       />
 
-      {/* ── ALARM SCREEN ── renders over everything when alarm fires ── */}
+      {/* ── ALARM SCREEN — over everything, cannot be dismissed ── */}
+      {/* FIX 1: Removed duplicate AlarmAlertModal that caused the crash.
+          AlarmScreen already handles all alarm UI. AlarmAlertModal was
+          calling handleMarkPillTaken which does not exist → property error. */}
       <AlarmScreen
         visible={!!activeAlarm}
         pill={activeAlarm}

@@ -26,39 +26,39 @@
  *  const [activeAlarm, setActiveAlarm] = useState(null);
  *
  *  // 2. Detect alarm on startup (app was launched by alarm)
- *  useEffect(() => {
- *    notifee.getInitialNotification().then((initial) => {
- *      if (initial?.notification?.data?.type === 'alarm') {
- *        setActiveAlarm(JSON.parse(initial.notification.data.pill));
- *      }
- *    });
+   useEffect(() => {
+     notifee.getInitialNotification().then((initial) => {
+       if (initial?.notification?.data?.type === 'alarm') {
+         setActiveAlarm(JSON.parse(initial.notification.data.pill));
+       }
+     });
  *
- *    // 3. Detect alarm while app is already open
- *    const unsub = notifee.onForegroundEvent(({ type, detail }) => {
- *      if (
- *        type === EventType.DELIVERED &&
- *        detail.notification?.data?.type === 'alarm'
- *      ) {
- *        setActiveAlarm(JSON.parse(detail.notification.data.pill));
- *      }
- *    });
- *    return unsub;
- *  }, []);
+     // 3. Detect alarm while app is already open
+     const unsub = notifee.onForegroundEvent(({ type, detail }) => {
+       if (
+         type === EventType.DELIVERED &&
+         detail.notification?.data?.type === 'alarm'
+       ) {
+         setActiveAlarm(JSON.parse(detail.notification.data.pill));
+       }
+     });
+     return unsub;
+   }, []);
  *
  *  // 4. In JSX (place OUTSIDE ScrollView, at root level):
- *  <AlarmAlertModal
- *    visible={!!activeAlarm}
- *    pill={activeAlarm}
- *    onTaken={async () => {
- *      await handleMarkPillTaken(activeAlarm._id);  // your existing handler
- *      await notificationService.cancelAlarm(activeAlarm._id);
- *      setActiveAlarm(null);
- *    }}
- *    onSnooze={async () => {
- *      await notificationService.snoozeAlarm(activeAlarm);
- *      setActiveAlarm(null);
- *    }}
- *  />
+   <AlarmAlertModal
+     visible={!!activeAlarm}
+     pill={activeAlarm}
+     onTaken={async () => {
+       await handleMarkPillTaken(activeAlarm._id);  // your existing handler
+       await notificationService.cancelAlarm(activeAlarm._id);
+       setActiveAlarm(null);
+     }}
+     onSnooze={async () => {
+       await notificationService.snoozeAlarm(activeAlarm);
+       setActiveAlarm(null);
+     }}
+   />
  * ─────────────────────────────────────────────────────────
  */
 
